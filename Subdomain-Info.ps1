@@ -86,15 +86,16 @@ function Get-IPGeolocation {
 
 function Export-Excel {
 
-	# Todo Why is this happenning?
-	$_csv_file_name = $args[0][0]
-	$_xlsx_file_name = $args[0][1]
-	$_worksheet_name = $args[0][2]
+	param(
+		$csv_file_name,
+		$xlsx_file_name,
+		$worksheet_name
+	)
 
 	try {
 
-		if( -not $_xlsx_file_name ) {
-			throw "_xlsx_file_name Variable is null"
+		if( -not $xlsx_file_name ) {
+			throw "xlsx_file_name Variable is null"
 		}
 
 		Write-Host "**** Excel Part Running *****"
@@ -103,36 +104,46 @@ function Export-Excel {
 
 		# Create a new Excel workbook with one empty sheet
 		$excel = New-Object -ComObject excel.application
-		if(Test-Path -Path $_xlsx_file_name) {
+		$new = $false
+		if(Test-Path -Path $xlsx_file_name) {
 			# Open the file if file exists
 			Write-Host "Openning the xlsx"
-			$workbook = $excel.Workbooks.Open($_xlsx_file_name)
+			$workbook = $excel.Workbooks.Open($xlsx_file_name)
 		} else {
 			# Create a new workbook
-			Write-Host "Creating a new xlsx: '$_xlsx_file_name'"
+			Write-Host "Creating a new xlsx: '$xlsx_file_name'"
 			$workbook = $excel.Workbooks.Add(1)
+			$new = $true
 		}
 
-		$found = 0
-		foreach( $ws in $workbook.Worksheets ) {
-			if( $worksheet_name -eq $ws.Name) {
-				$found = 1
-				break
-			}
-		}
-
-		if(-not $found) {
-			# $LastSheet = $WB.Worksheets|Select -Last 1
-			$worksheet = $workbook.Worksheets.add()
-			$worksheet.Name = $_worksheet_name
-			#Move the last sheet up one spot, making the new sheet the new effective last sheet
-			# $LastSheet.Move($WS)
+		if( $new ) {
+			$worksheet = $workbook.Worksheets.Item(1)
+			$worksheet.Name = $worksheet_name
 		} else {
-			$worksheet = $workbook.Worksheets.Item($_worksheet_name)
+
+			$found = 0
+			foreach( $ws in $workbook.Worksheets ) {
+				if( $worksheet_name -eq $ws.Name) {
+					$found = 1
+					break
+				}
+			}
+
+			if(-not $found) {
+				$worksheet = $workbook.Worksheets.add()
+				$worksheet.Activate()
+				$worksheet.Name = $worksheet_name
+				# Move the last sheet up one spot, making the new sheet the new effective last sheet
+				$lastSheet = $workbook.WorkSheets.Item($workbook.WorkSheets.Count) 
+				$worksheet.Move([System.Reflection.Missing]::Value, $lastSheet)
+			} else {
+				$worksheet = $workbook.Worksheets.Item($worksheet_name)
+			}
+
 		}
 
 		# Build the QueryTables.Add command and reformat the data
-		$TxtConnector = ("TEXT;" + $_csv_file_name)
+		$TxtConnector = ("TEXT;" + $csv_file_name)
 		
 		$Connector = $worksheet.QueryTables.add($TxtConnector,$worksheet.Range("A1"))
 
@@ -149,12 +160,12 @@ function Export-Excel {
 
 		# Save & close the Workbook as XLSX.
 
-		if(Test-Path -Path $_xlsx_file_name) {
+		if(Test-Path -Path $xlsx_file_name) {
 			Write-Host "Save"
 			$workbook.Save()
 		} else {
 			Write-Host "SaveAs"
-			$workbook.SaveAs($_xlsx_file_name, 51)
+			$workbook.SaveAs($xlsx_file_name, 51)
 		}
 	} catch {
 		Write-Host $_.Exception
@@ -191,7 +202,7 @@ try {
 
 	if ( $convert ) {
 		Write-Host "Only Converting CSV to Excel"
-		Export-Excel($csv_file_name, $xlsx_file_name, $worksheet_name)
+		Export-Excel $csv_file_name $xlsx_file_name $worksheet_name
 		Write-Host "Conversion to Excel finished"
 		Write-Host "Quitting"
 		return
@@ -281,7 +292,7 @@ try{
 					$tempObj.HttpHeadersLink = $response.Headers.Link.Replace(",", " - ")
 				}
 				
-				$tempObj.HttpHtmlTitle = Get-HtmlTitle($response)
+				$tempObj.HttpHtmlTitle = Get-HtmlTitle $response
 			
 			} catch [System.Net.WebException] {
 				If ($_.Exception.Response.StatusCode.value__) {
@@ -348,8 +359,8 @@ try{
 	}
 
 	$FinalResult | Export-Csv $csv_file_name -NoTypeInformation
-	
-	Export-Excel($csv_file_name, $xlsx_file_name, $worksheet_name)
+
+	Export-Excel $csv_file_name $xlsx_file_name $worksheet_name
 } catch {
 	Write-Host $_.Exception.Message
 }
