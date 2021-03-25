@@ -4,7 +4,7 @@
 	.SYNOPSIS
 	Created By:
 	Team Juno
-	Jette Jerndal & Babak Bandpey
+	Babak Bandpey
 	2021
 
 	╔═══╗    ╔╗    ╔╗                        ╔══╗     ╔═╗    
@@ -23,7 +23,7 @@
 	To see the full help run: Get-Help Subdomain-Info.ps -full
 
 	Usage
-	Subdomain-info.ps -subdomains full-path-to-file-containing-a-list-of-subdomain.txt -xlsx full-path-to-where-the-result-shall-be-saved.xlsx -worksheet the-name-of-the-worksheet -convert 0-or-1
+	Subdomain-info.ps -subdomains 'full-path-to-file-containing-a-list-of-subdomain.txt' -xlsx 'full-path-to-where-the-result-shall-be-saved.xlsx' -worksheet 'the-name-of-the-worksheet'
 	
 	.PARAMETER subdomains
 	Full path to a .txt file containing a list of subdomains
@@ -38,8 +38,16 @@
 	If the flag convert is used, the scanning will not take place and an already existing csv file will be used to
 	update the worksheet.
 	The csv file must have the same name as the .txt file name
-
 	If you wish to convert a csv file to a worksheet in the workbook without running the scans you can set -convert
+
+	.PARAMETER p
+	Port number(s) to scan by nmap. Can be written as 1,2,3,4 or 2-20 or 2-20,80,443,8000,8080
+
+	.PARAMETER d
+	Host discovery by nmap. To see if the host is up or not.
+
+	.PARAMETER f
+	Fast mode: IP-address discovery of the subdomains only
 #>
 
 param (
@@ -49,139 +57,31 @@ param (
 	[Parameter(Mandatory=$true)][string]$xlsx = $(Write-Host " -xlsx parameter is required. A .xlsx Excel file which the result will be saved in."),
 	# worksheet Worksheet name
 	[Parameter(Mandatory=$true)][string]$worksheet = $(Write-Host " -worksheet parameter is required. A Excel worksheet name which the result will be saved in."),
+	[Parameter(Mandatory=$false)][string]$p = $(Write-Host " -p is for the port numbers usage: -p 20-80,1135,443"),
+	[Parameter(Mandatory=$false)][switch]$d = $(Write-Host " -d is for the host discovery"),
+	[Parameter(Mandatory=$false)][switch]$f = $(Write-Host " -f is for ip-address discovery"),
 	# convert if set will only do conversion of an already existing csv file
 	[switch]$convert
 )
 
-$subdomains_file = $subdomains.replace(";", "")
-$csv_file_name = $subdomains_file.Replace("txt", "csv")
-$xlsx_file_name = $xlsx.replace(";", "")
+Clear-Host
 
-# Removing illegal characters from the worksheet name 
-$escapables = ";:\\/?*"
-foreach($sign in $escapables) {
-	$worksheet_name = $worksheet.replace($sign, " ")
-}
+. ".\Functions.ps1"
 
 # Accumulating the results
 $FinalResult = @()
 
-function Get-HtmlTitle($data) {
-	$title = $data.Content | Select-String '<title>.+</title>' -AllMatches
-	Return $title.Matches.Value
+# Removing illegal characters
+$subdomains_file = Filter-Chars $subdomains @(";")
+$csv_file_name = $subdomains_file.Replace("txt", "csv")
+$xlsx_file_name = Filter-Chars $xlsx @(";")
+$worksheet_name = Filter-Chars $worksheet ";",":","\\","/","?","*"
+
+if( $p -ne "" ){
+	$p = Filter-Chars $p ";"," -"
 }
-
-function Get-IPGeolocation {
-  Param
-  (
-    [string]$IPAddress
-  ) 
-  $request = Invoke-RestMethod -Method Get -Uri "http://ip-api.com/json/$IPAddress"
-  [PSCustomObject]@{
-    City    = $request.city
-    Country = $request.country
-    Isp     = $request.isp
-  }
-}
-
-function Export-Excel {
-
-	# Todo Why is this happenning?
-	$_csv_file_name = $args[0][0]
-	$_xlsx_file_name = $args[0][1]
-	$_worksheet_name = $args[0][2]
-
-	try {
-
-		if( -not $_xlsx_file_name ) {
-			throw "_xlsx_file_name Variable is null"
-		}
-
-		Write-Host "**** Excel Part Running *****"
-		#Define locations and delimiter
-		$delimiter = "," #Specify the delimiter used in the file
-
-		# Create a new Excel workbook with one empty sheet
-		$excel = New-Object -ComObject excel.application
-		if(Test-Path -Path $_xlsx_file_name) {
-			# Open the file if file exists
-			Write-Host "Openning the xlsx"
-			$workbook = $excel.Workbooks.Open($_xlsx_file_name)
-		} else {
-			# Create a new workbook
-			Write-Host "Creating a new xlsx: '$_xlsx_file_name'"
-			$workbook = $excel.Workbooks.Add(1)
-		}
-
-		$found = 0
-		foreach( $ws in $workbook.Worksheets ) {
-			if( $worksheet_name -eq $ws.Name) {
-				$found = 1
-				break
-			}
-		}
-
-		if(-not $found) {
-			# $LastSheet = $WB.Worksheets|Select -Last 1
-			$worksheet = $workbook.Worksheets.add()
-			$worksheet.Name = $_worksheet_name
-			#Move the last sheet up one spot, making the new sheet the new effective last sheet
-			# $LastSheet.Move($WS)
-		} else {
-			$worksheet = $workbook.Worksheets.Item($_worksheet_name)
-		}
-
-		# Build the QueryTables.Add command and reformat the data
-		$TxtConnector = ("TEXT;" + $_csv_file_name)
-		
-		$Connector = $worksheet.QueryTables.add($TxtConnector,$worksheet.Range("A1"))
-
-		$query = $worksheet.QueryTables.item($Connector.name)
-
-		$query.TextFileOtherDelimiter = $delimiter
-		$query.TextFileParseType  = 1
-		$query.TextFileColumnDataTypes = ,1 * $worksheet.Cells.Columns.Count
-		$query.AdjustColumnWidth = 1
-
-		# Execute & delete the import query
-		$query.Refresh()
-		$query.Delete()
-
-		# Save & close the Workbook as XLSX.
-
-		if(Test-Path -Path $_xlsx_file_name) {
-			Write-Host "Save"
-			$workbook.Save()
-		} else {
-			Write-Host "SaveAs"
-			$workbook.SaveAs($_xlsx_file_name, 51)
-		}
-	} catch {
-		Write-Host $_.Exception
-	} finally {
-		Write-Host "Closing workbook"
-		$workbook.Close(0)
-		Write-Host "Quitting Excel"
-		$excel.Quit()
-
-		#Check and you will see an excel process still exists after quitting
-		#Remove the excel process by piping it to stop-process
-
-		[System.GC]::Collect()
-		[System.GC]::WaitForPendingFinalizers()
-		[System.Runtime.Interopservices.Marshal]::ReleaseComObject($worksheet)
-		[System.Runtime.Interopservices.Marshal]::ReleaseComObject($workbook)
-		[System.Runtime.Interopservices.Marshal]::ReleaseComObject($excel)
-		Remove-Variable -Name excel
-
-		Write-Host "Force Stop"
-		Get-Process excel | Stop-Process -Force
-	}
-} # End Export-Excel
-
 
 try {
-	Clear-Host
 
 	Write-Host $text_file_name
 
@@ -191,7 +91,7 @@ try {
 
 	if ( $convert ) {
 		Write-Host "Only Converting CSV to Excel"
-		Export-Excel($csv_file_name, $xlsx_file_name, $worksheet_name)
+		Export-Excel $csv_file_name $xlsx_file_name $worksheet_name
 		Write-Host "Conversion to Excel finished"
 		Write-Host "Quitting"
 		return
@@ -207,51 +107,88 @@ try {
 
 Write-Host "Reading the file: $subdomains_file"
 
+
+
 try{
-	
+	if( $f ) {
+		Write-Host "******************************************************"
+		Write-Host "* Running -f fast mode. Discovering ip-address only. *"
+		Write-Host "******************************************************"
+	}
+
 	$lines = Get-Content $subdomains_file
 	
 	Write-Host "Read $($lines.Length) lines from $subdomains_file"
 	
 	$lines | ForEach-Object{
 		
-		$Name = $_
+		$start_time = Get-TotalMilliseconds
+
+		$subdomain = $_
+		Write-Host $subdomain
+
 		$ServerList = @('8.8.8.8','8.8.4.4')
 		# $ServerList = @('10.0.50.11','10.0.50.12')
-		$tempObj = "" | Select-Object Name, PingedAddress, PingResult, IPAddress, City, Country, ISP, DnsStatus, ErrorMessage, HttpUrl, HttpStatusCode, HttpHtmlTitle, HttpError, HttpHeadersLink, HttpsUrl, HttpsStatusCode, HttpsHtmlTitle, HttpsHeadersLink, HttpsError, FtpServer, FtpConnection, FtpError
-		
-		try 
-		{   
-			Write-Host $Name
-			
-			$dnsRecord = Resolve-DnsName $Name -Server $ServerList -ErrorAction Stop | Where-Object {$_.Type -eq 'A'}        
-			$tempObj.Name = $Name
-			$tempObj.IPAddress = ($dnsRecord.IPAddress -join ',')
-			$tempObj.DnsStatus = 'OK'
-			$tempObj.ErrorMessage = ''    
-		}    
-		catch 
-		{
-			$tempObj.Name = $Name
-			$tempObj.IPAddress = ''
-			$tempObj.DnsStatus = 'NOT_OK'        
-			$tempObj.ErrorMessage = $_.Exception.Message    
-		}
+		$tempObj = "" | Select-Object Name, PingedAddress, PingResult, IPAddress, City, Country, ISP, DnsStatus, ErrorMessage, HttpUrl, HttpStatusCode, HttpHtmlTitle, HttpError, HttpHeadersLink, HttpsUrl, HttpsStatusCode, HttpsHtmlTitle, HttpsHeadersLink, HttpsError, FtpServer, FtpConnection, FtpError, PortScan
 		
 		try {
-			$tempObj.PingedAddress = "" | ping $Name -4 -n 1 -w 1000			
-			if( $tempObj.PingedAddress -eq "" ) {
-				$tempObj.PingResult = $tempObj.PingedAddress[5].Split(",")[2]
-				$tempObj.PingedAddress = $tempObj.PingedAddress[1].Split("[")[1].Split("]")[0]
-				
+			$tempObj.Name = $subdomain
+
+			if( $f ) {
+				try {
+					$testNetConnection = Test-NetConnection -ComputerName $subdomain
+					$tempObj.PingedAddress = $testNetConnection.RemoteAddress
+					$tempObj.PingResult = $testNetConnection.PingSucceeded
+					# $Timeout = 100
+					# $Ping = New-Object System.Net.NetworkInformation.Ping
+					# $Response = $Ping.Send($subdomain, $Timeout)
+
+					# $tempObj.PingedAddress = $Response.Address
+					# $tempObj.PingResult = $Response.Status
+				} catch {
+					$tempObj.PingedAddress = ""
+					$tempObj.PingResult = "Failed"
+				}
+
+				$FinalResult += $tempObj
+				return
+			}
+			
+			$testNetConnection = Test-NetConnection -ComputerName $subdomain -InformationLevel "Detailed"
+			$tempObj.PingedAddress = $testNetConnection.RemoteAddress
+			$tempObj.PingResult = $testNetConnection.PingSucceeded
+
+			try 
+			{   
+				$dnsRecord = Resolve-DnsName $subdomain -Server $ServerList -ErrorAction Stop | Where-Object {$_.Type -eq 'A'}        
+				$tempObj.IPAddress = ($dnsRecord.IPAddress -join ',')
+				$tempObj.DnsStatus = 'OK'
+				$tempObj.ErrorMessage = ''    
+			}    
+			catch 
+			{
+				$tempObj.Name = $subdomain
+				$tempObj.IPAddress = ''
+				$tempObj.DnsStatus = 'NOT_OK'        
+				$tempObj.ErrorMessage = $_.Exception.Message    
+			}
+
+			Write-Host $tempObj.PingedAddress
+
+			if( $tempObj.PingedAddress -ne "" ) {			
+				echo "GEO LOCATION"
+
 				$IpGeolocation = Get-IPGeolocation($tempObj.PingedAddress)
 
 				$tempObj.City = $IpGeolocation.City
 				$tempObj.Country = $IpGeolocation.Country
 				$tempObj.ISP = $IpGeolocation.Isp
 				
-				# Sleeping for 1.5 seconds to avoid blacklisting https://www.easy365manager.com/ip-geo-location-lookup-using-powershell/
-				Start-Sleep -Seconds 1.5
+				$elapsed_time = Get-TotalMilliseconds - $start_time
+				if($elapsed_time -lt 1500 ) {
+					# Sleeping for 1.5 seconds to avoid blacklisting https://www.easy365manager.com/ip-geo-location-lookup-using-powershell/
+					Start-Sleep -Seconds (1500 - $elapsed_time)
+				}
 				
 			}
 		} catch {
@@ -259,8 +196,43 @@ try{
 			Write-Host $_.Exception.Message
 		}
 		
-		if( $Name.IndexOf("ftp") -gt -1) {
-			$tempObj.FtpServer = $Name
+		# Port scanning part
+		
+		try {
+			if( $d ) {
+				$tempObj.PortScan = Port-Scan $tempObj.PingedAddress
+			}elseif ( $p ) {
+				$tempObj.PortScan = Port-Scan $tempObj.PingedAddress $p
+
+				# $port_numbers = $p.Replace(" ", "").Split(",")
+				
+				# foreach($port_number in $port_numbers) {
+				# 	if( $port_number.IndexOf("-") -ne -1) {
+				# 		$ports_range = $port_number.Split("-")
+				# 		$min_port = [Convert]::ToInt32($ports_range[0])
+				# 		$max_port = [Convert]::ToInt32($ports_range[1])
+				# 		for ($port_number = $min_port; $port_number -lt $max_port; $port_number++) {
+				# 			Write-Host $port_number
+				# 			Port-Scan $tempObj.PingedAddress $port_number
+				# 		}
+						
+				# 	} else {
+				# 		Write-Host $port_number
+				# 		Port-Scan $tempObj.PingedAddress $port_number
+				# 	}
+				# }
+			}
+		}
+		catch {
+			Write-Host $_.Exception.Message
+		}
+		
+		# *******************
+		# Port Scan part ends
+		# *******************
+
+		if( $subdomain.IndexOf("ftp") -gt -1) {
+			$tempObj.FtpServer = $subdomain
 			try {
 				Write-Host $tempObj.FtpServer
 				$data = Test-NetConnection -ComputerName $tempObj.FtpServer -Port 21
@@ -269,8 +241,8 @@ try{
 				$tempObj.FtpError = $_.Exception.Message
 			}
 		} else {					
-			$tempObj.HttpUrl = "http://$Name"
-			$tempObj.HttpsUrl = "https://$Name"
+			$tempObj.HttpUrl = "http://$subdomain"
+			$tempObj.HttpsUrl = "https://$subdomain"
 			
 			try {
 				Write-Host $tempObj.HttpUrl
@@ -281,7 +253,7 @@ try{
 					$tempObj.HttpHeadersLink = $response.Headers.Link.Replace(",", " - ")
 				}
 				
-				$tempObj.HttpHtmlTitle = Get-HtmlTitle($response)
+				$tempObj.HttpHtmlTitle = Get-HtmlTitle $response
 			
 			} catch [System.Net.WebException] {
 				If ($_.Exception.Response.StatusCode.value__) {
@@ -348,8 +320,8 @@ try{
 	}
 
 	$FinalResult | Export-Csv $csv_file_name -NoTypeInformation
-	
-	Export-Excel($csv_file_name, $xlsx_file_name, $worksheet_name)
+
+	Export-Excel $csv_file_name $xlsx_file_name $worksheet_name
 } catch {
 	Write-Host $_.Exception.Message
 }
